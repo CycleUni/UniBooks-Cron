@@ -1,9 +1,15 @@
 #!/bin/sh
-set -e
 
-# Ensure required environment variables are set
-if [ -z "$CRON_TARGET_URL" ]; then
-  echo "Error: CRON_TARGET_URL environment variable is not set."
+# Support CRON_TARGET_URLS or CRON_TARGET_URL or CLI arguments
+TARGET_URLS="${CRON_TARGET_URLS:-$CRON_TARGET_URL}"
+
+# If command-line arguments are provided, use them
+if [ "$#" -gt 0 ]; then
+  TARGET_URLS="$*"
+fi
+
+if [ -z "$TARGET_URLS" ]; then
+  echo "Error: Neither CRON_TARGET_URL nor CRON_TARGET_URLS environment variable is set."
   exit 1
 fi
 
@@ -14,10 +20,50 @@ fi
 
 echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Starting Cron Job..."
 
-# Send POST request to the target URL with the secret token
-curl -sS -X POST "$CRON_TARGET_URL" \
-     -H "Authorization: Bearer $CRON_SECRET"
+# Normalize comma or newline separated URLs into space-separated list
+FORMATTED_URLS=$(echo "$TARGET_URLS" | tr ',' ' ' | tr '\n' ' ')
 
-echo ""
-echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Cron Job finished successfully."
+EXIT_CODE=0
 
+for url in $FORMATTED_URLS; do
+  url=$(echo "$url" | xargs)
+  [ -z "$url" ] && continue
+
+  echo "----------------------------------------"
+  echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Calling: $url"
+
+  # Perform POST request, capturing HTTP response and status code
+  HTTP_RESPONSE=$(curl -sS -w "\n%{http_code}" -X POST "$url" \
+       -H "Authorization: Bearer $CRON_SECRET" \
+       --max-time 60)
+  CURL_STATUS=$?
+
+  if [ $CURL_STATUS -ne 0 ]; then
+    echo "Error: curl failed with exit code $CURL_STATUS for $url"
+    EXIT_CODE=1
+    continue
+  fi
+
+  # Extract body and HTTP status code
+  HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+  HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
+
+  echo "Response HTTP Status: $HTTP_CODE"
+  if [ -n "$HTTP_BODY" ]; then
+    echo "Response Body: $HTTP_BODY"
+  fi
+
+  if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+    echo "Warning: Target returned non-2xx status code: $HTTP_CODE"
+    EXIT_CODE=1
+  fi
+done
+
+echo "----------------------------------------"
+if [ $EXIT_CODE -eq 0 ]; then
+  echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] All Cron Jobs finished successfully."
+else
+  echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] One or more Cron Jobs failed."
+fi
+
+exit $EXIT_CODE
