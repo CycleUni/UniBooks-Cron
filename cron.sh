@@ -1,16 +1,13 @@
 #!/bin/sh
 
-# Support CRON_TARGET_URLS or CRON_TARGET_URL or CLI arguments
-TARGET_URLS="${CRON_TARGET_URLS:-$CRON_TARGET_URL}"
+DEFAULT_URLS="https://api.unibooks.app/api/cron/waitlist-notify/,https://api.unibooks.app/api/cron/meetup-reminder/"
+
+# Support CRON_TARGET_URLS or CRON_TARGET_URL or CLI arguments, fallback to DEFAULT_URLS
+TARGET_URLS="${CRON_TARGET_URLS:-${CRON_TARGET_URL:-$DEFAULT_URLS}}"
 
 # If command-line arguments are provided, use them
 if [ "$#" -gt 0 ]; then
   TARGET_URLS="$*"
-fi
-
-if [ -z "$TARGET_URLS" ]; then
-  echo "Error: Neither CRON_TARGET_URL nor CRON_TARGET_URLS environment variable is set."
-  exit 1
 fi
 
 if [ -z "$CRON_SECRET" ]; then
@@ -28,6 +25,15 @@ EXIT_CODE=0
 for url in $FORMATTED_URLS; do
   url=$(echo "$url" | xargs)
   [ -z "$url" ] && continue
+
+  # Filter out non-existent base /api/cron or /api/cron/ root endpoint
+  case "$url" in
+    */api/cron|*/api/cron/)
+      echo "----------------------------------------"
+      echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Skipping $url (root /api/cron has no handler, please use sub-endpoints)"
+      continue
+      ;;
+  esac
 
   echo "----------------------------------------"
   echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Calling: $url"
